@@ -1,17 +1,34 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include <pthread.h>
-#include <sys/socket.h>
+#include <string.h>
+#include <unistd.h>
 #include <netinet/in.h>
 
 #define PORT 9000
+#define BUFFER_SIZE 1024
 
-void handle_connection(void *arg)
+void *handle_connection(void *arg)
 {
-    int *client_fd = (int *)arg;
+    char *hello = "hello from server";
+    char buffer[BUFFER_SIZE] = {0};
+    int client_fd = *(int *)arg;
     free(arg);
 
-    // Handle the client connection here
-    
+    ssize_t read_bytes = read(client_fd, buffer, BUFFER_SIZE - 1);
+    if (read_bytes == 0)
+    {
+        perror("[Error] : Error Reading Request");
+        close(client_fd);
+    }
+
+    buffer[read_bytes] = '\n';
+
+    printf("Request : %s \n", buffer);
+    send(client_fd, hello, strlen(hello), 0);
+    printf("Hello message sent to client.\n");
+    close(client_fd);
+    return NULL;
 }
 
 void startServer()
@@ -19,8 +36,7 @@ void startServer()
     // Ignore SIGPIPE signal to prevent server crash when writing to a closed socket
     signal(SIGPIPE, SIG_IGN);
 
-    int server_fd;
-
+    int server_fd, new_socket;
     // Creating Socket
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0)
@@ -29,13 +45,15 @@ void startServer()
         exit(EXIT_FAILURE);
     }
 
+    printf("Socket Created Successfully\n");
+
     // Configure Address Structure
     struct sockaddr_in address;
     int address_len = sizeof(address);
     memset(&address, 0, sizeof(address));
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_family = AF_INET;
-    address.sin_port = PORT;
+    address.sin_port = htons(PORT);
 
     // Binding Socket
     if ((bind(server_fd, (struct sockaddr *)&address, address_len)) < 0)
@@ -44,6 +62,7 @@ void startServer()
         close(server_fd);
         exit(EXIT_FAILURE);
     }
+    printf("Socket binded Successfully\n");
 
     // Listen on Socket
     if ((listen(server_fd, SOMAXCONN)) < 0)
@@ -53,18 +72,16 @@ void startServer()
         exit(EXIT_FAILURE);
     }
 
+    printf("Socket Listening on port : %d\n", PORT);
+
     while (1)
     {
-        int new_socket;
-        struct sockaddr_in client_addr;
-        socklen_t client_addr_len = sizeof(client_addr);
-        memset(&client_addr, 0, sizeof(client_addr));
-
-        if ((new_socket = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len)) < 0)
+        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t *)&address_len)) < 0)
         {
             perror("[Warn] : Error while Accepting Connection]");
             continue;
         }
+
         int *worker_fd = malloc(sizeof(int));
         if (worker_fd == NULL)
         {
@@ -72,10 +89,10 @@ void startServer()
             close(new_socket);
             continue;
         }
-        *worker_fd = new_socket;
 
+        *worker_fd = new_socket;
         pthread_t thread_id;
-        if ((pthread_create(&thread_id, NULL, handle_connection, &worker_fd)) < 0)
+        if ((pthread_create(&thread_id, NULL, handle_connection, worker_fd)) < 0)
         {
             perror("[Warn] : Error while Creating Thread]");
             close(new_socket);

@@ -2,11 +2,11 @@
 
 ## Overview
 
-A high-performance multithreaded proxy server implemented in C++, designed to efficiently handle concurrent network connections with advanced caching, logging, rate limiting, and load balancing capabilities. This server provides a robust solution for proxying HTTP requests with minimal overhead and maximum scalability.
+A high-performance multithreaded reverse proxy server implemented in C, designed to efficiently handle concurrent network connections with caching, logging, rate limiting, and load balancing capabilities. This server provides a robust solution for proxying HTTP requests with minimal overhead and maximum scalability.
 
 ## Key Features
 
-- **Multithreaded** Architecture: Leverages a sophisticated thread pool to manage multiple client connections concurrently, ensuring optimal resource utilization and responsive performance.
+- **Multithreaded** Leverages a sophisticated thread pool to manage multiple client connections concurrently, ensuring optimal resource utilization and responsive performance.
 
 - **Intelligent Caching**: Implements a Least Recently Used (LRU) caching mechanism to store and retrieve HTTP responses, dramatically reducing redundant backend requests and improving response times.
 
@@ -22,7 +22,7 @@ A high-performance multithreaded proxy server implemented in C++, designed to ef
 
 ## Technology Stack
 
-- **Language**: C++ (Modern C++ standards)
+- **Language**: C
 - **Build System**: CMake
 - **Concurrency**: Thread Pool design pattern
 - **Caching**: Custom LRU Cache implementation
@@ -32,7 +32,7 @@ A high-performance multithreaded proxy server implemented in C++, designed to ef
 
 ## Prerequisites
 
-- **Compiler**: Modern C++ compiler (g++ ≥ 9.0 or clang++)
+- **Compiler**: Modern C compiler (gcc ≥ 9.0 or clang)
 - **Build Tools**: 
   - **CMake** (version 3.10 or later)
   - **pthread** library

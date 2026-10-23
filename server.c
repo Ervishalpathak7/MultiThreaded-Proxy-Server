@@ -8,9 +8,16 @@
 #define PORT 9000
 #define BUFFER_SIZE 1024
 
+char *http_response = 
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 24\r\n"
+    "Connection: close\r\n"
+    "\r\n"
+    "Hello from the C Server!";
+
 void *handle_connection(void *arg)
 {
-    char *hello = "hello from server";
     char buffer[BUFFER_SIZE] = {0};
     int client_fd = *(int *)arg;
     free(arg);
@@ -25,7 +32,7 @@ void *handle_connection(void *arg)
     buffer[read_bytes] = '\n';
 
     printf("Request : %s \n", buffer);
-    send(client_fd, hello, strlen(hello), 0);
+    send(client_fd, http_response, strlen(http_response), 0);
     printf("Hello message sent to client.\n");
     close(client_fd);
     return NULL;
@@ -45,8 +52,6 @@ void startServer()
         exit(EXIT_FAILURE);
     }
 
-    printf("Socket Created Successfully\n");
-
     // Configure Address Structure
     struct sockaddr_in address;
     int address_len = sizeof(address);
@@ -62,7 +67,6 @@ void startServer()
         close(server_fd);
         exit(EXIT_FAILURE);
     }
-    printf("Socket binded Successfully\n");
 
     // Listen on Socket
     if ((listen(server_fd, SOMAXCONN)) < 0)

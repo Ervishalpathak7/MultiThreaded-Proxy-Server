@@ -1,128 +1,135 @@
 
 #include "request_parser.h"
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
 
-struct ParsedRequest *ParsedRequest_create()
+ssize_t find_header_end(const char *buf, size_t len)
 {
-    struct ParsedRequest *request = (struct ParsedRequest *)malloc(sizeof(struct ParsedRequest));
-    request->method = NULL;
-    request->host = NULL;
-    request->path = NULL;
-    request->version = NULL;
-    request->body = NULL;
-    request->headers = NULL;
-    request->bodylen = 0;
-    return request;
+    for (size_t i = 0; i + 4 <= len; i++)
+    {
+        if (buf[i] == '\r' && buf[i + 1] == '\n' &&
+            buf[i + 2] == '\r' && buf[i + 3] == '\n')
+            return (ssize_t)(i + 4);
+    }
+    return -1;
 }
 
-struct ParsedHeader *ParsedHeader_create(const char *key, const char *value)
+static ssize_t find_crlf(const char *buf, size_t len)
 {
-    struct ParsedHeader *header = (struct ParsedHeader *)malloc(sizeof(struct ParsedHeader));
-    header->key = strdup(key);
-    header->keylen = strlen(key) + 1;
-    header->value = strdup(value);
-    header->valuelen = strlen(value) + 1;
+    for (size_t i = 0; i + 2 <= len; i++)
+        if (buf[i] == '\r' && buf[i + 1] == '\n')
+            return (ssize_t)i;
+    return -1;
+}
+
+struct ParsedRequest *ParsedRequest_create(void)
+{
+    return calloc(1, sizeof(struct ParsedRequest)); // zeroed, NULL if it fails
+}
+
+const char *ParsedRequest_get_header(const struct ParsedRequest *req, const char *key)
+{
+    for (const struct ParsedHeader *h = req->headers; h; h = h->next)
+        if (strcasecmp(h->key, key) == 0)
+            return h->value;
+    return NULL;
+}
+
+static struct ParsedHeader *header_from_line(const char *line, size_t len)
+{
+    const char *colon = memchr(line, ':', len);
+    if (!colon)
+        return NULL;
+
+    char *key_start = line;
+    char *key_end = colon;
+    char *value_start = colon + 1;
+    char *value_end = line + len;
+
+    while (key_start < key_end && (*key_start == ' ') || *key_start == '\t')
+        key_start++;
+    while (key_end > key_start && (key_end[-1] == ' ' || key_end[-1] == '\t'))
+        key_end--;
+    while (value_start < value_end && (*key_start == ' ' || key_start == '\t'))
+        value_start++;
+    while (value_end > value_start && (value_end[-1] == ' ' || value_end[-1] == '\t'))
+        value_end--;
+
+    struct ParsedHeader *header = calloc(1, sizeof(*header));
+    if (!header)
+        return NULL;
+
+    header->key = strndup(key_start, (size_t)(key_end - key_start));
+    header->value = strndup(value_start, (size_t)(value_end - value_start));
+    if (!header->key || !header->value)
+    {
+        free(header->key);
+        free(header->value);
+        free(header);
+        return NULL;
+    }
+
+    header->keylen = (size_t)(key_end - key_start);
+    header->valuelen = (size_t)(value_end - value_start);
     header->next = NULL;
     return header;
 }
 
-struct ParsedHeader *ParsedHeader_parse(const char *header_line)
+int ParsedRequest_parse(struct ParsedRequest *req, const char *buf, size_t buflen)
 {
+    // find header end
+    size_t header_end = find_header_end(buf, buflen);
+    if (header_end < 0)
+        return -1;
+    req->head_len = header_end;
 
-    char *line_copy = strdup(header_line);
-    char *key = strtok(line_copy, ":");
-    char *value = strtok(NULL, "");
-    if (key && value)
-    {
-        while (*key == ' ')
-            key++;
-        while (*value == ' ')
-            value++;
+    // request line
+    size_t line_len = find_crlf(buf, buflen);
+    if (line_len < 0)
+        return -1;
 
-        struct ParsedHeader *header = ParsedHeader_create(key, value);
-        free(line_copy);
-        return header;
-    }
-    free(line_copy);
-    return NULL;
-}
-
-struct ParsedRequest *ParsedRequest_parse(struct ParsedRequest *request, const char *buf, int buflen)
-{
-    // Parse the request line
-    char *request_line_end = strstr(buf, "\r\n");
-    if (!request_line_end)
-        return NULL;
-
-    char *request_line = strndup(buf, request_line_end - buf);
+    char *request_line = strndup(buf, (size_t)line_len);
     if (!request_line)
-        return NULL;
+        return -1;
 
-    char *method = strtok(request_line, " ");
-    char *host = strtok(NULL, " ");
-    char *path = strtok(NULL, " ");
-    char *version = strtok(NULL, "\r\n");
+    char *save = NULL;
+    char *method = strtok_r(request_line, " ", &save);
+    char *path = strtok_r(NULL, " ", &save);
+    char *version = strtok_r(NULL, " ", &save);
+    char *extra = strtok_r(NULL, " ", &save);
 
-    if (method && host && path && version)
-    {
-        request->method = strdup(method);
-        request->host = strdup(host);
-        request->path = strdup(path);
-        request->version = strdup(version);
-    }
-    else
+    if (!method || !path || !version || extra || strncmp(version, "HTTP/", 5) != 0)
     {
         free(request_line);
-        return NULL; 
+        return -1;
     }
-    
     free(request_line);
-
-
     // Parse headers
-    const char *header_start = request_line_end + 2;             // Skip the request line and CRLF
-    const char *header_end = strstr(header_start, "\r\n\r\n"); // Find the end of headers
+    const char *cur = buf + line_len + 2;
+    const char *end = buf + header_end - 2;
+    struct ParsedHeader *tail = NULL;
 
-    if (header_end)
-    {
-        const char *current = header_start;
-        while (current < header_end)
-        {
-            const char *line_end = strstr(current, "\r\n");
-            if (!line_end)
-                break;
+    return 0; // Success
+}
 
-            char *line = strndup(current, line_end - current);
-            if (line)
-            {
-                struct ParsedHeader *header = ParsedHeader_parse(line);
-                if (header)
-                {
-                    if (request->headers == NULL)
-                    {
-                        request->headers = header;
-                    }
-                    else
-                    {
-                        struct ParsedHeader *current_header = request->headers;
-                        while (current_header->next != NULL)
-                        {
-                            current_header = current_header->next;
-                        }
-                        current_header->next = header;
-                    }
-                }
-                free(line);
-            }
-            current = line_end + 2; // Move to the next header line
-        }
-    }
-    // Parse body if present
-    const char *body_start = strstr(buf, "\r\n\r\n");
-    if (body_start)
+// Free the memory allocated for the ParsedRequest and its headers
+void ParsedRequest_destroy(struct ParsedRequest *req)
+{
+    if (!req)
+        return;
+    free(req->method);
+    free(req->path);
+    free(req->version);
+    free(req->host);
+    struct ParsedHeader *h = req->headers;
+    while (h)
     {
-        body_start += 4; // Skip the CRLF CRLF
-        request->body = strdup(body_start);
-        request->bodylen = strlen(request->body) + 1;
+        struct ParsedHeader *next = h->next;
+        free(h->key);
+        free(h->value);
+        free(h);
+        h = next;
     }
-    return request;
+    free(req);
 }

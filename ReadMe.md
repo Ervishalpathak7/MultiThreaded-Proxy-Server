@@ -1,134 +1,166 @@
-# Multithreaded Proxy Server
+# ⚡ Async Reverse Proxy in C
 
-## Overview
+> A high-performance, event-driven web server and reverse proxy written from scratch in C.
+> It is a **build-to-learn** project: every feature starts with studying the concepts behind it, then building it yourself.
 
-A high-performance multithreaded reverse proxy server implemented in C, designed to efficiently handle concurrent network connections with caching, logging, rate limiting, and load balancing capabilities. This server provides a robust solution for proxying HTTP requests with minimal overhead and maximum scalability.
+---
 
-## Key Features
+## 🎯 Vision
 
-- **Multithreaded** Leverages a sophisticated thread pool to manage multiple client connections concurrently, ensuring optimal resource utilization and responsive performance.
+The goal is a small, very fast **asynchronous** web server, in the same family as nginx, HAProxy or Envoy. Each part of it is written by hand, so that by the end you understand every layer:
 
-- **Intelligent Caching**: Implements a Least Recently Used (LRU) caching mechanism to store and retrieve HTTP responses, dramatically reducing redundant backend requests and improving response times.
-
-- **Comprehensive Logging**: Integrates a flexible, custom logging system that provides granular tracking of HTTP request and response metadata for comprehensive monitoring and debugging.
-
-- **Rate Limiting**: Implements advanced rate limiting mechanisms to control the number of requests a client can make within a specified time window, preventing abuse and ensuring fair resource distribution.
-
-- **Load Balancing**: Provides load balancing capabilities to distribute client requests across multiple backend servers, ensuring high availability and improved fault tolerance.
-
-- **Lightweight Design**: Operates without external database dependencies, ensuring a lean, high-performance proxy solution that can be easily integrated into various network architectures.
-
-
-
-## Technology Stack
-
-- **Language**: C
-- **Build System**: CMake
-- **Concurrency**: Thread Pool design pattern
-- **Caching**: Custom LRU Cache implementation
-- **Logging**: Utilizes spdlog and fmt libraries
-- **Rate Limiting**: Custom rate limiting implementation for HTTP requests
-- **Load Balancing**: Round-robin load balancing for distributing traffic across backend server
-
-## Prerequisites
-
-- **Compiler**: Modern C compiler (gcc ≥ 9.0 or clang)
-- **Build Tools**: 
-  - **CMake** (version 3.10 or later)
-  - **pthread** library
-- **Dependencies**:
-  - `spdlog`
-  - `fmt`
-
-## Installation
-
-### Build Instructions
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/multithreaded-proxy-server.git
-cd multithreaded-proxy-server
-
-# Create build directory
-mkdir build && cd build
-
-# Configure the project
-cmake ..
-
-# Compile the server
-make
+```
+            ┌──────────────────────────────────────────────┐
+ Client ──► │  TLS termination ─► HTTP parser ─► Router    │
+ (HTTPS)    │                                   │          │
+            │                       ┌── LRU Cache (hit) ──►│──► Response
+            │                       │                      │
+            │                       └── Load Balancer ─────│──► Backend 1
+            │                                              │──► Backend 2
+            │       Event loop (epoll / kqueue) × N cores  │──► Backend N
+            └──────────────────────────────────────────────┘
 ```
 
-### Running the Server
+## ✨ Core Features
 
-```bash
-# Execute the proxy server
-./server
+| Feature | What it means |
+|---|---|
+| **Async I/O engine** | Non-blocking sockets with `epoll` (Linux) and `kqueue` (macOS/BSD), one event loop per CPU core (multi-reactor). No thread per connection. |
+| **Reverse proxy** | Forwards client requests to upstream servers, rewrites headers (`X-Forwarded-For`, `Host`, hop-by-hop headers), streams bodies, and reuses upstream connections from a pool. |
+| **Load balancing** | Round robin, weighted round robin, least connections, and consistent hashing, with active and passive health checks. |
+| **LRU caching** | In-memory response cache built from a hash map and a doubly linked list. It follows HTTP caching rules (`Cache-Control`, `ETag`, TTL) and is sharded so threads don't block each other. |
+| **SSL/TLS termination** | HTTPS on the front end using OpenSSL with non-blocking handshakes, SNI (one certificate per host) and session resumption. |
+
+### Stretch goals
+Rate limiting (token bucket), async logging, metrics endpoint, graceful reload, `sendfile` zero-copy static files, and HTTP/2.
+
+## 🧠 Learning Philosophy
+
+**Study → Build → Break → Measure → Improve**
+
+1. **Study** the concepts each task needs. Every task in [`TASKS.md`](./TASKS.md) lists them.
+2. **Build** the smallest working version yourself before looking at reference code.
+3. **Break** it with load tests, sanitizers, fuzzing and bad input.
+4. **Measure** it with benchmarks and profilers.
+5. **Improve** it, and record what you learned in `notes/`.
+
+Fundamentals covered along the way: TCP/IP and sockets, processes vs threads, **race conditions, mutexes, semaphores, condition variables, deadlocks**, the producer–consumer problem, atomics and memory ordering, I/O multiplexing, state machines, data structures (hash maps, linked lists, heaps, timer wheels), memory management, cryptography basics, and performance engineering.
+
+👉 **The full step-by-step roadmap is in [`TASKS.md`](./TASKS.md).**
+
+## 🏗️ Target Architecture
+
+```
+main thread
+  ├── parse config, bind listening sockets, set up TLS contexts
+  ├── spawn N worker threads (N = CPU cores)
+  └── handle signals (SIGINT/SIGTERM → graceful shutdown, SIGHUP → reload)
+
+worker thread × N   (each owns one event loop; it shares nothing except the cache and stats)
+  ├── accept()  (SO_REUSEPORT: the kernel spreads connections across workers)
+  ├── per-connection state machine:
+  │     TLS_HANDSHAKE → READ_REQUEST → PARSE → CACHE_LOOKUP
+  │        → (hit)  WRITE_RESPONSE
+  │        → (miss) PICK_UPSTREAM → CONNECT → FORWARD → STREAM_RESPONSE → CACHE_STORE
+  ├── timers (idle / header / upstream timeouts)
+  └── upstream connection pool (per worker, so no locks)
+
+shared
+  ├── LRU cache (sharded; mutex or rwlock per shard; ref-counted entries)
+  ├── upstream health state (atomics)
+  └── stats counters (per-thread, summed when read)
 ```
 
-## Usage Scenario
+## 📁 Planned Layout
 
-The proxy server acts as an intermediary for HTTP requests, efficiently:
+```
+.
+├── src/
+│   ├── main.c
+│   ├── core/        # event loop, buffers, timers, memory pools, logging
+│   ├── net/         # sockets, listeners, connection handling
+│   ├── http/        # parser, request/response, headers, chunked encoding
+│   ├── proxy/       # upstream, connection pool, forwarding
+│   ├── lb/          # load-balancing algorithms, health checks
+│   ├── cache/       # LRU cache, cache policy
+│   ├── tls/         # OpenSSL integration
+│   └── config/      # config file parser
+├── include/
+├── tests/           # unit tests + integration tests
+├── bench/           # benchmark scripts and results
+├── learn/           # small standalone experiments for each concept
+├── notes/           # your learning notes, one file per topic
+├── CMakeLists.txt
+├── ReadMe.md
+└── TASKS.md
+```
 
-- Forwarding client requests to backend servers
-- Caching responses to minimize network overhead
-- Logging detailed request/response information
-- Enforcing rate limiting to control traffic and ensure fair use of resources
-- Balancing load across backend servers for improved scalability and fault tolerance
+## 🛠️ Tech Stack
 
-## Roadmap and Improvements
+- **Language:** C11 (POSIX)
+- **Build:** CMake (plus a simple Makefile at the start)
+- **I/O:** `epoll` (Linux), `kqueue` (macOS), behind a small shared interface
+- **Concurrency:** `pthreads`, C11 `<stdatomic.h>`
+- **TLS:** OpenSSL 3.x
+- **Tooling:** `lldb`/`gdb`, AddressSanitizer / ThreadSanitizer / UBSan, Valgrind (Linux), `wrk` / `h2load` / `ab` for load tests, `perf` / Instruments with flamegraphs for profiling
+- **No external runtime dependencies** apart from OpenSSL.
 
-Below are the enhancements planned for future releases to improve the functionality, scalability, and security of the proxy server:
+## 🚀 Build & Run (once Phase 0 is done)
 
-### 1. **SSL/TLS Encryption Support**
-   - **Description**: Implement SSL/TLS encryption to secure communications between clients and the proxy server.
-   - **Benefit**: Provides encryption for data in transit, ensuring privacy and security.
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+./build/proxy -c proxy.conf
+```
 
-### 2. **Advanced Caching Mechanisms**
-   - **Description**: Integrate more advanced caching mechanisms such as Redis or Memcached for distributed caching.
-   - **Benefit**: Scales caching across multiple servers, improving performance and reducing database load.
+Example config (target format):
 
-### 3. **Distributed Proxy Server**
-   - **Description**: Set up a load-balanced cluster of proxy servers to distribute traffic across multiple instances.
-   - **Benefit**: Ensures high availability, better fault tolerance, and improved scalability.
+```
+listen 8443 ssl;
+ssl_certificate     certs/server.crt;
+ssl_certificate_key certs/server.key;
 
+upstream backend {
+    strategy least_conn;
+    server 127.0.0.1:9001 weight=3;
+    server 127.0.0.1:9002;
+    health_check interval=5s path=/health;
+}
 
-### 6. **Request/Response Compression**
-   - **Description**: Add support for HTTP compression (gzip or Brotli) for responses to reduce bandwidth consumption.
-   - **Benefit**: Speeds up response times and reduces the amount of data transferred.
+cache {
+    max_size 256m;
+    default_ttl 60s;
+}
 
+route / {
+    proxy_pass backend;
+    cache on;
+}
+```
 
-### 8. **HTTP/2 or HTTP/3 Support**
-   - **Description**: Implement support for HTTP/2 or HTTP/3 to optimize network performance through multiplexing and header compression.
-   - **Benefit**: Provides faster and more efficient handling of requests, especially for modern web applications.
+## 📊 Performance Goals
 
-### 9. **Failover and Recovery Mechanism**
-   - **Description**: Implement automatic failover mechanisms, including health checks and redundancy.
-   - **Benefit**: Increases reliability by ensuring minimal downtime and automatic recovery in case of failure.
+| Milestone | Target (on a laptop, keep-alive, small responses) |
+|---|---|
+| Blocking server | Baseline number; it's meant to be slow |
+| Thread pool | ~10× the baseline |
+| Single event loop | 50k+ req/s |
+| Multi-reactor | 150k+ req/s, scaling with cores |
+| Proxy + cache hit | Within ~20% of nginx with the same config |
 
-### 10. **Dynamic Configuration Management**
-   - **Description**: Allow dynamic configuration updates (e.g., routes, caching policies) without requiring server restarts.
-   - **Benefit**: Makes the proxy server more flexible and easier to manage in a production environment.
+Every result goes into `bench/RESULTS.md` along with the hardware and command used.
 
+## 📚 Core Reading List
 
-### 12. **Traffic Analytics**
-   - **Description**: Integrate traffic analytics to gather data on request/response patterns and usage statistics.
-   - **Benefit**: Helps make data-driven decisions on performance tuning, capacity planning, and optimization.
+- *Beej's Guide to Network Programming*: sockets
+- *UNIX Network Programming, Vol. 1* (W. Richard Stevens): the main networking reference
+- *The Linux Programming Interface* (Michael Kerrisk): system calls, processes, threads, signals
+- *Operating Systems: Three Easy Pieces* (OSTEP): concurrency chapters (free online)
+- *The Little Book of Semaphores* (Allen Downey): synchronization puzzles (free)
+- *The C10K Problem* (Dan Kegel): why async I/O exists
+- RFC 9110 (HTTP semantics), RFC 9111 (HTTP caching), RFC 9112 (HTTP/1.1), RFC 8446 (TLS 1.3)
+- nginx architecture: *"Inside NGINX: How We Designed for Performance & Scale"*
 
+## 📜 License
 
-## Contribution
-
-**Contributions are welcome!** 
-
-- Fork the repository
-- Create feature branches
-- Submit pull requests
-- Report issues and suggest improvements
-
-## License
-
-**MIT License**. See the `LICENSE` file for complete details.
-
-## Contact
-
-For questions, suggestions, or collaboration, please open an issue in the GitHub repository.
+MIT

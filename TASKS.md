@@ -18,7 +18,7 @@
 
 | Phase | Topic | Status |
 |---|---|---|
-| 0 | Setup, C refresher & tooling | ⬜ |
+| 0 | Setup, C refresher & tooling | 🟨 |
 | 1 | Networking & socket programming | ⬜ |
 | 2 | HTTP/1.1 & parsing | ⬜ |
 | 3 | Concurrency fundamentals (threads, races, locks, semaphores) | ⬜ |

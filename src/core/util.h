@@ -60,6 +60,19 @@ size_t format_http_date(char *buf, size_t cap, uint64_t epoch_s);
 /* FNV-1a 64-bit hash; good enough for the cache and consistent hashing. */
 uint64_t hash_fnv1a(const void *data, size_t len);
 
+/* Finalizer (murmur3 fmix64) that spreads entropy across all 64 bits.
+ * FNV alone clusters similar short keys in the high bits, which matters
+ * when hashes are compared as integers (consistent hashing ring). */
+static inline uint64_t hash_mix64(uint64_t h)
+{
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ull;
+    h ^= h >> 33;
+    return h;
+}
+
 /* Allocation wrappers that abort on OOM. The server cannot do anything
  * sensible without memory, so failing fast beats scattering NULL checks. */
 void *xmalloc(size_t n);

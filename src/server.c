@@ -19,6 +19,7 @@
 #include "net/conn.h"
 #include "proxy/pool.h"
 #include "proxy/proxy.h"
+#include "tls/tls.h"
 
 /* ------------------------------------------------------------------------
  * Lifecycle
@@ -54,6 +55,17 @@ server_t *server_new(config_t *cfg)
 
     srv->cache = cache_new(cfg->cache_max_size, (size_t)cfg->cache_shards);
 
+    bool need_tls = cfg->http3_port != 0;
+    for (size_t i = 0; i < cfg->nlistens; i++)
+        need_tls |= cfg->listens[i].ssl;
+    if (need_tls) {
+        srv->tls = tls_ctx_new(cfg);
+        if (!srv->tls) {
+            server_free(srv);
+            return NULL;
+        }
+    }
+
     srv->nworkers = cfg->workers > 0 ? cfg->workers : (int)sysconf(_SC_NPROCESSORS_ONLN);
     if (srv->nworkers < 1)
         srv->nworkers = 1;
@@ -73,6 +85,7 @@ void server_free(server_t *srv)
     free(srv->groups);
     free(srv->health);
     cache_free(srv->cache);
+    tls_ctx_free(srv->tls);
     free(srv->workers);
     config_free(srv->cfg);
     free(srv);
@@ -140,6 +153,11 @@ int server_run(server_t *srv)
  * ---------------------------------------------------------------------- */
 void server_on_accept(server_t *srv, conn_t *c)
 {
+    if (c->listener->ssl) {
+        /* The frontend is chosen by ALPN once the handshake completes. */
+        tls_conn_start(c, srv->tls);
+        return;
+    }
     /* Plaintext listeners speak HTTP/1.1 directly. */
     h1_conn_attach(c);
 }

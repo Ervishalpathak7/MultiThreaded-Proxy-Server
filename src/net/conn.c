@@ -16,6 +16,7 @@
 #include "core/util.h"
 #include "net/worker.h"
 #include "server.h"
+#include "tls/tls.h"
 
 /* How much we try to read per readiness event. Big enough to drain a whole
  * TLS record or a typical request in one syscall, small enough to keep one
@@ -114,6 +115,8 @@ void conn_close(conn_t *c)
     ev_del(c->w->loop, c->fd);
     if (c->ops && c->ops->on_close)
         c->ops->on_close(c);
+    if (c->ssl)
+        tls_conn_free(c);
     close(c->fd);
     c->fd = -1;
     worker_remove_conn(c->w, c);
@@ -172,6 +175,8 @@ static void on_timer(timer_t_ *t)
  * ---------------------------------------------------------------------- */
 ssize_t conn_read_raw(conn_t *c, void *buf, size_t len)
 {
+    if (c->ssl)
+        return tls_conn_read(c, buf, len);
     for (;;) {
         ssize_t n = read(c->fd, buf, len);
         if (n < 0 && errno == EINTR)
@@ -182,6 +187,8 @@ ssize_t conn_read_raw(conn_t *c, void *buf, size_t len)
 
 ssize_t conn_write_raw(conn_t *c, const void *buf, size_t len)
 {
+    if (c->ssl)
+        return tls_conn_write(c, buf, len);
     for (;;) {
 #ifdef MSG_NOSIGNAL
         ssize_t n = send(c->fd, buf, len, MSG_NOSIGNAL);
@@ -213,11 +220,6 @@ void conn_flush(conn_t *c)
             conn_update_interest(c); /* wait for EV_WRITE */
             return;
         }
-        if (n == 0 && c->ssl) {
-            /* TLS layer wants more handshake I/O; interest already set. */
-            conn_update_interest(c);
-            return;
-        }
         LOG_DEBUG("write to %s failed: %s", c->peer_ip, strerror(errno));
         conn_close(c);
         return;
@@ -242,8 +244,6 @@ static void do_read(conn_t *c)
         return;
     }
     if (n == 0) {
-        if (c->ssl && c->tls_handshaking)
-            return; /* handshake progressed, nothing to deliver yet */
         LOG_DEBUG("%s closed the connection", c->peer_ip);
         conn_close(c);
         return;
@@ -263,8 +263,13 @@ static void on_io(event_loop_t *loop, int fd, int events, void *arg)
         conn_close(c);
         goto out;
     }
+    if (c->tls_handshaking) {
+        /* Any readiness just means "try the handshake again". */
+        tls_conn_handshake(c);
+        goto out;
+    }
     if (events & EV_WRITE) {
-        if (c->tls_handshaking || c->tls_want_write) {
+        if (c->tls_want_write) {
             /* TLS wanted the socket writable; let the read side continue. */
             c->tls_want_write = false;
             do_read(c);

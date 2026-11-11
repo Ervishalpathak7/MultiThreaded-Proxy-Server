@@ -47,6 +47,8 @@ typedef struct server {
     /* Active health checkers (run on worker 0's loop), one per group. */
     health_checker_t **health;
 
+    struct cache *cache; /* shared response cache */
+
     server_stats_t stats;
     uint64_t started_at; /* wall clock seconds */
     atomic_bool stopping;

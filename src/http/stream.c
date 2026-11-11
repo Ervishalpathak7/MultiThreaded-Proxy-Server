@@ -32,6 +32,7 @@ void stream_free(http_stream_t *s)
         return;
     http_request_free(&s->req);
     http_response_free(&s->resp);
+    free(s->cache_key);
     free(s);
 }
 

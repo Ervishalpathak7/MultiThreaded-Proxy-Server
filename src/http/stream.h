@@ -51,6 +51,8 @@ struct http_stream {
 
     bool aborted;
     bool cache_hit;
+    char *cache_key; /* set when the response may be stored; owned */
+    const struct config_route *route;
     uint64_t start_ms;
 };
 

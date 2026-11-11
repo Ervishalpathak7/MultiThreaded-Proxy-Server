@@ -10,6 +10,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "cache/lru.h"
+#include "cache/policy.h"
 #include "core/log.h"
 #include "core/util.h"
 #include "http/h1_server.h"
@@ -50,6 +52,8 @@ server_t *server_new(config_t *cfg)
         srv->ngroups++;
     }
 
+    srv->cache = cache_new(cfg->cache_max_size, (size_t)cfg->cache_shards);
+
     srv->nworkers = cfg->workers > 0 ? cfg->workers : (int)sysconf(_SC_NPROCESSORS_ONLN);
     if (srv->nworkers < 1)
         srv->nworkers = 1;
@@ -68,6 +72,7 @@ void server_free(server_t *srv)
         lb_group_free(srv->groups[i]);
     free(srv->groups);
     free(srv->health);
+    cache_free(srv->cache);
     free(srv->workers);
     config_free(srv->cfg);
     free(srv);
@@ -173,14 +178,16 @@ void server_stats_json(server_t *srv, buf_t *out)
                "  \"workers\": %d,\n"
                "  \"connections\": {\"active\": %llu, \"total\": %llu},\n"
                "  \"requests\": %llu,\n"
-               "  \"cache\": {\"hits\": %llu, \"misses\": %llu},\n"
+               "  \"cache\": {\"hits\": %llu, \"misses\": %llu, \"entries\": %zu, "
+               "\"bytes\": %zu, \"evictions\": %llu},\n"
                "  \"upstream\": {\"requests\": %llu, \"errors\": %llu},\n"
                "  \"bytes\": {\"in\": %llu, \"out\": %llu},\n"
                "  \"upstreams\": {\n",
                APROXY_VERSION, (unsigned long long)(wall_s() - srv->started_at), srv->nworkers,
                LOADU(active_conns), LOADU(total_conns), LOADU(requests), LOADU(cache_hits),
-               LOADU(cache_misses), LOADU(upstream_requests), LOADU(upstream_errors),
-               LOADU(bytes_in), LOADU(bytes_out));
+               LOADU(cache_misses), cache_entries(srv->cache), cache_bytes(srv->cache),
+               (unsigned long long)atomic_load_explicit(&srv->cache->evictions, memory_order_relaxed),
+               LOADU(upstream_requests), LOADU(upstream_errors), LOADU(bytes_in), LOADU(bytes_out));
 #undef LOADU
     uint64_t now = now_ms();
     for (size_t i = 0; i < srv->ngroups; i++) {
@@ -188,6 +195,21 @@ void server_stats_json(server_t *srv, buf_t *out)
         buf_append_str(out, i + 1 < srv->ngroups ? ",\n" : "\n");
     }
     buf_append_str(out, "  }\n}\n");
+}
+
+/* Called by the proxy with the rewritten upstream response, before it is
+ * delivered: store it if the policy allows and mark it as a miss. */
+static void cache_store_hook(http_stream_t *s, void *arg)
+{
+    server_t *srv = arg;
+    headers_set_str(&s->resp.headers, "X-Cache", "MISS");
+    if (!s->cache_key)
+        return;
+    uint64_t ttl;
+    uint64_t default_ttl = s->route && s->route->cache_ttl_ms ? s->route->cache_ttl_ms
+                                                              : srv->cfg->cache_default_ttl_ms;
+    if (cache_policy_response_cacheable(&s->resp, default_ttl, &ttl))
+        cache_put(srv->cache, s->cache_key, strlen(s->cache_key), &s->resp, ttl, now_ms());
 }
 
 void server_dispatch(server_t *srv, http_stream_t *s)
@@ -220,5 +242,30 @@ void server_dispatch(server_t *srv, http_stream_t *s)
         return;
     }
 
-    proxy_forward(s, route, group, NULL, NULL);
+    s->route = route;
+    if (!route->cache || !cache_policy_request_cacheable(req)) {
+        proxy_forward(s, route, group, NULL, NULL);
+        return;
+    }
+
+    /* Cache lookup. */
+    buf_t key;
+    buf_init(&key);
+    cache_policy_build_key(req, &key);
+    cache_entry_t *e = cache_get(srv->cache, buf_rptr(&key), buf_rlen(&key), now_ms());
+    if (e) {
+        s->cache_hit = true;
+        cache_policy_fill_response(&s->resp, e, wall_s());
+        cache_entry_unref(e);
+        buf_free(&key);
+        atomic_fetch_add_explicit(&srv->stats.cache_hits, 1, memory_order_relaxed);
+        stream_finish(s);
+        return;
+    }
+    atomic_fetch_add_explicit(&srv->stats.cache_misses, 1, memory_order_relaxed);
+    /* Only GET responses are stored; HEAD is served from GET entries. */
+    if (http_request_method_is(req, "GET"))
+        s->cache_key = xstrndup(buf_rptr(&key), buf_rlen(&key));
+    buf_free(&key);
+    proxy_forward(s, route, group, cache_store_hook, srv);
 }

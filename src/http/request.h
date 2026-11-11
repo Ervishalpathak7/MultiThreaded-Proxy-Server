@@ -104,4 +104,24 @@ const char *http_status_reason(int status);
 /* Hop-by-hop headers must not be forwarded by a proxy (RFC 9110 §7.6.1). */
 bool http_header_is_hop_by_hop(const char *name, size_t len);
 
+/* ------------------------------------------------------------------------
+ * Binary framing helpers (HTTP/2 and HTTP/3)
+ * ---------------------------------------------------------------------- */
+/* A borrowed (name, value) pair. */
+typedef struct http_field {
+    const char *name;
+    size_t nlen;
+    const char *val;
+    size_t vlen;
+} http_field_t;
+
+/* Flatten a response into the field list HPACK/QPACK want: ":status"
+ * first, then every header with a lowercased name, minus the
+ * connection-specific ones that only make sense for HTTP/1 (RFC 9113
+ * §8.2.2), then a content-length regenerated from `body_len`. The strings
+ * live in `scratch` (caller-initialised, caller-freed); the array is
+ * malloc'ed, returned through *out and holds the field count. */
+size_t http_response_fields_binary(const http_response_t *r, size_t body_len, buf_t *scratch,
+                                   http_field_t **out);
+
 #endif /* APROXY_HTTP_REQUEST_H */

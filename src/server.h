@@ -49,6 +49,8 @@ typedef struct server {
 
     struct cache *cache;    /* shared response cache */
     struct tls_ctx *tls;    /* NULL when no listener uses TLS */
+    struct h3_endpoint *h3; /* QUIC endpoint, runs on worker 0 (NULL if off) */
+    char alt_svc[48];       /* "h3=\":443\"; ma=86400", empty when HTTP/3 is off */
 
     server_stats_t stats;
     uint64_t started_at; /* wall clock seconds */

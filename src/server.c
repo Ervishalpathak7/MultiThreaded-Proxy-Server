@@ -20,6 +20,9 @@
 #include "proxy/pool.h"
 #include "proxy/proxy.h"
 #include "tls/tls.h"
+#if HAVE_HTTP3
+#include "http/h3_server.h"
+#endif
 
 /* ------------------------------------------------------------------------
  * Lifecycle
@@ -64,6 +67,16 @@ server_t *server_new(config_t *cfg)
             server_free(srv);
             return NULL;
         }
+    }
+
+    if (cfg->http3_port) {
+#if HAVE_HTTP3
+        /* Advertised on every TCP response so browsers can switch to QUIC
+         * (RFC 7838). The socket itself is opened by worker 0. */
+        snprintf(srv->alt_svc, sizeof(srv->alt_svc), "h3=\":%u\"; ma=86400", cfg->http3_port);
+#else
+        LOG_WARN("'http3 %u' ignored: built without HTTP/3 support", cfg->http3_port);
+#endif
     }
 
     srv->nworkers = cfg->workers > 0 ? cfg->workers : (int)sysconf(_SC_NPROCESSORS_ONLN);
@@ -170,10 +183,25 @@ void server_worker_init(server_t *srv, worker_t *w)
     if (w->id == 0)
         for (size_t i = 0; i < srv->ngroups; i++)
             srv->health[i] = health_checker_start(srv->groups[i], w->loop);
+#if HAVE_HTTP3
+    /* QUIC has no accept(): one UDP socket receives every connection's
+     * packets, so the whole HTTP/3 frontend lives on a single loop. */
+    if (w->id == 0 && srv->cfg->http3_port) {
+        srv->h3 = h3_endpoint_start(srv, w);
+        if (!srv->h3)
+            LOG_ERROR("HTTP/3 frontend failed to start; continuing without it");
+    }
+#endif
 }
 
 void server_worker_cleanup(server_t *srv, worker_t *w)
 {
+#if HAVE_HTTP3
+    if (srv->h3 && w->id == 0) {
+        h3_endpoint_stop(srv->h3);
+        srv->h3 = NULL;
+    }
+#endif
     if (w->id == 0)
         for (size_t i = 0; i < srv->ngroups; i++) {
             health_checker_stop(srv->health[i]);

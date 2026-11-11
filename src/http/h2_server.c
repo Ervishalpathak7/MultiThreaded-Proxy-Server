@@ -11,7 +11,6 @@
  */
 #include "http/h2_server.h"
 
-#include <ctype.h>
 #include <nghttp2/nghttp2.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -110,15 +109,6 @@ static nghttp2_ssize body_read_cb(nghttp2_session *session, int32_t stream_id, u
     return (nghttp2_ssize)n;
 }
 
-/* Headers that only make sense for HTTP/1 connections (RFC 9113 §8.2.2).
- * content-length is regenerated from the buffered body. */
-static bool h2_forbidden_header(const char *name, size_t len)
-{
-    return str_ieq_lit(name, len, "connection") || str_ieq_lit(name, len, "keep-alive") ||
-           str_ieq_lit(name, len, "transfer-encoding") || str_ieq_lit(name, len, "upgrade") ||
-           str_ieq_lit(name, len, "proxy-connection") || str_ieq_lit(name, len, "content-length");
-}
-
 static void h2_respond(http_stream_t *s)
 {
     h2_stream_t *hs = s->frontend;
@@ -126,54 +116,22 @@ static void h2_respond(http_stream_t *s)
     http_response_t *resp = &s->resp;
     bool head = http_request_method_is(&s->req, "HEAD");
 
-    /* nghttp2 wants lowercase names; build them in a scratch buffer. */
-    size_t nh = headers_count(&resp->headers);
-    nghttp2_nv *nva = xcalloc(nh + 3, sizeof(*nva));
+    /* nghttp2 wants lowercase names and no connection-specific headers. */
     buf_t scratch;
     buf_init(&scratch);
-    buf_reserve(&scratch, resp->headers.arena.len + 64);
-    size_t n = 0;
-
-    char status[4];
-    snprintf(status, sizeof(status), "%d", resp->status);
-    nva[n++] = (nghttp2_nv){(uint8_t *)":status", (uint8_t *)status, 7, 3, NGHTTP2_NV_FLAG_NONE};
-
-    /* Remember offsets, since scratch may be reallocated while filling. */
-    size_t *offs = xcalloc(nh * 2, sizeof(size_t));
-    size_t m = 0;
-    for (size_t i = 0; i < nh; i++) {
-        size_t nl, vl;
-        const char *nm = headers_name(&resp->headers, i, &nl);
-        const char *v = headers_value(&resp->headers, i, &vl);
-        if (h2_forbidden_header(nm, nl))
-            continue;
-        offs[m * 2] = scratch.len;
-        for (size_t k = 0; k < nl; k++) {
-            char lc = (char)tolower((unsigned char)nm[k]);
-            buf_append(&scratch, &lc, 1);
-        }
-        offs[m * 2 + 1] = scratch.len;
-        buf_append(&scratch, v, vl);
-        nva[n + m] = (nghttp2_nv){NULL, NULL, nl, vl, NGHTTP2_NV_FLAG_NONE};
-        m++;
-    }
-    for (size_t i = 0; i < m; i++) {
-        nva[n + i].name = (uint8_t *)scratch.data + offs[i * 2];
-        nva[n + i].value = (uint8_t *)scratch.data + offs[i * 2 + 1];
-    }
-    n += m;
-
-    char clen[24];
-    snprintf(clen, sizeof(clen), "%zu", buf_rlen(&resp->body));
-    nva[n++] = (nghttp2_nv){(uint8_t *)"content-length", (uint8_t *)clen, 14, strlen(clen),
-                            NGHTTP2_NV_FLAG_NONE};
+    http_field_t *f;
+    size_t n = http_response_fields_binary(resp, buf_rlen(&resp->body), &scratch, &f);
+    nghttp2_nv *nva = xcalloc(n, sizeof(*nva));
+    for (size_t i = 0; i < n; i++)
+        nva[i] = (nghttp2_nv){(uint8_t *)f[i].name, (uint8_t *)f[i].val, f[i].nlen, f[i].vlen,
+                              NGHTTP2_NV_FLAG_NONE};
 
     nghttp2_data_provider2 prd = {.source.ptr = hs, .read_callback = body_read_cb};
     bool has_body = !head && buf_rlen(&resp->body) > 0;
     int rv = nghttp2_submit_response2(h->session, hs->id, nva, n, has_body ? &prd : NULL);
-    free(offs);
-    buf_free(&scratch);
     free(nva);
+    free(f);
+    buf_free(&scratch);
     if (rv != 0) {
         LOG_WARN("h2: submit_response failed: %s", nghttp2_strerror(rv));
         nghttp2_submit_rst_stream(h->session, NGHTTP2_FLAG_NONE, hs->id, NGHTTP2_INTERNAL_ERROR);

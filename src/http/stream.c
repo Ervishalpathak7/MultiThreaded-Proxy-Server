@@ -56,6 +56,10 @@ void stream_finish(http_stream_t *s)
     s->cancel = NULL;
     s->pipeline = NULL;
 
+    /* Tell TCP clients that the same service is reachable over QUIC. */
+    if (s->worker->srv->alt_svc[0] && s->req.version_major != 3)
+        headers_set_str(&s->resp.headers, "Alt-Svc", s->worker->srv->alt_svc);
+
     /* Access log: one line per request, like nginx's combined format but
      * shorter. Emitted at INFO so it can be silenced with log_level warn. */
     uint64_t took = ev_now(s->worker->loop) - s->start_ms;

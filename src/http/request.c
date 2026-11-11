@@ -4,6 +4,7 @@
 #include "http/request.h"
 
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -251,4 +252,67 @@ bool http_header_is_hop_by_hop(const char *name, size_t len)
         if (str_ieq_lit(name, len, hop[i]))
             return true;
     return false;
+}
+
+/* ------------------------------------------------------------------------
+ * Binary framing helpers
+ * ---------------------------------------------------------------------- */
+static bool connection_specific(const char *name, size_t len)
+{
+    return str_ieq_lit(name, len, "connection") || str_ieq_lit(name, len, "keep-alive") ||
+           str_ieq_lit(name, len, "proxy-connection") ||
+           str_ieq_lit(name, len, "transfer-encoding") || str_ieq_lit(name, len, "upgrade") ||
+           str_ieq_lit(name, len, "content-length");
+}
+
+size_t http_response_fields_binary(const http_response_t *r, size_t body_len, buf_t *scratch,
+                                   http_field_t **out)
+{
+    size_t nh = headers_count(&r->headers);
+    http_field_t *f = xcalloc(nh + 2, sizeof(*f));
+    /* Offsets rather than pointers while filling: scratch may reallocate. */
+    size_t *off = xcalloc((nh + 2) * 2, sizeof(*off));
+    size_t n = 0;
+
+    off[0] = scratch->len;
+    buf_append_str(scratch, ":status");
+    off[1] = scratch->len;
+    buf_printf(scratch, "%d", r->status);
+    f[n].nlen = 7;
+    f[n].vlen = scratch->len - off[1];
+    n++;
+
+    for (size_t i = 0; i < nh; i++) {
+        size_t nl, vl;
+        const char *nm = headers_name(&r->headers, i, &nl);
+        const char *v = headers_value(&r->headers, i, &vl);
+        if (connection_specific(nm, nl))
+            continue;
+        off[n * 2] = scratch->len;
+        for (size_t k = 0; k < nl; k++) {
+            char lc = (char)tolower((unsigned char)nm[k]);
+            buf_append(scratch, &lc, 1);
+        }
+        off[n * 2 + 1] = scratch->len;
+        buf_append(scratch, v, vl);
+        f[n].nlen = nl;
+        f[n].vlen = vl;
+        n++;
+    }
+
+    off[n * 2] = scratch->len;
+    buf_append_str(scratch, "content-length");
+    off[n * 2 + 1] = scratch->len;
+    buf_printf(scratch, "%zu", body_len);
+    f[n].nlen = 14;
+    f[n].vlen = scratch->len - off[n * 2 + 1];
+    n++;
+
+    for (size_t i = 0; i < n; i++) {
+        f[i].name = scratch->data + off[i * 2];
+        f[i].val = scratch->data + off[i * 2 + 1];
+    }
+    free(off);
+    *out = f;
+    return n;
 }

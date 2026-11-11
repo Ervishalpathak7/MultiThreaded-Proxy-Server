@@ -32,6 +32,9 @@ void tls_ctx_free(tls_ctx_t *t);
  * someone else (the QUIC frontend needs its own context). `alpn` is a
  * wire-format protocol list. */
 int tls_ctx_configure(tls_ctx_t *t, SSL_CTX *ctx, const unsigned char *alpn, size_t alpn_len);
+/* Pin the ALPN preference of one SSL object, overriding its context's.
+ * `alpn` must outlive the SSL object. */
+void tls_ssl_set_alpn(SSL *ssl, const unsigned char *alpn, size_t alpn_len);
 
 /* Begin a TLS server handshake on a freshly accepted connection. On
  * completion the matching HTTP frontend is attached automatically. */

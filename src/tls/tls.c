@@ -70,10 +70,24 @@ typedef struct {
     unsigned int alpn_len;
 } alpn_pref_t;
 
+/* Per-SSL ALPN override (see tls_ssl_set_alpn). */
+static int ssl_alpn_idx = -1;
+
+static void ssl_alpn_free(void *parent, void *ptr, CRYPTO_EX_DATA *ad, int idx, long argl,
+                          void *argp)
+{
+    free(ptr);
+}
+
 static int alpn_select_cb(SSL *ssl, const unsigned char **out, unsigned char *outlen,
                           const unsigned char *in, unsigned int inlen, void *arg)
 {
-    const alpn_pref_t *pref = arg;
+    /* A connection-level preference wins over the context's: the SNI
+     * callback may switch to a per-host context that was configured for
+     * the TCP protocols, while this connection is QUIC and must stay h3. */
+    const alpn_pref_t *pref = ssl_alpn_idx >= 0 ? SSL_get_ex_data(ssl, ssl_alpn_idx) : NULL;
+    if (!pref)
+        pref = arg;
     /* Picks the first of *our* protocols that the client also offers. */
     if (SSL_select_next_proto((unsigned char **)out, outlen, pref->alpn, pref->alpn_len, in,
                               inlen) == OPENSSL_NPN_NEGOTIATED)
@@ -137,12 +151,25 @@ int tls_ctx_configure(tls_ctx_t *t, SSL_CTX *ctx, const unsigned char *alpn, siz
     return 0;
 }
 
+void tls_ssl_set_alpn(SSL *ssl, const unsigned char *alpn, size_t alpn_len)
+{
+    if (ssl_alpn_idx < 0)
+        return;
+    alpn_pref_t *pref = xmalloc(sizeof(*pref));
+    pref->alpn = alpn;
+    pref->alpn_len = (unsigned int)alpn_len;
+    free(SSL_get_ex_data(ssl, ssl_alpn_idx));
+    SSL_set_ex_data(ssl, ssl_alpn_idx, pref);
+}
+
 tls_ctx_t *tls_ctx_new(const config_t *cfg)
 {
     if (cfg->ncerts == 0) {
         LOG_ERROR("TLS requested but no certificates configured");
         return NULL;
     }
+    if (ssl_alpn_idx < 0)
+        ssl_alpn_idx = SSL_get_ex_new_index(0, NULL, NULL, NULL, ssl_alpn_free);
     tls_ctx_t *t = xcalloc(1, sizeof(*t));
     t->hosts = xcalloc(cfg->ncerts, sizeof(tls_host_t));
 

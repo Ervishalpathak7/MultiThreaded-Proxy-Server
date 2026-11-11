@@ -1,0 +1,4 @@
+# clangd picks up exact flags, include paths and defines from CMake's
+# compile database (CMAKE_EXPORT_COMPILE_COMMANDS is ON in CMakeLists.txt).
+CompileFlags:
+  CompilationDatabase: build

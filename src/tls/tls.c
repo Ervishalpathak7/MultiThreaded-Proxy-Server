@@ -13,6 +13,9 @@
 #include "http/h1_server.h"
 #include "net/worker.h"
 #include "server.h"
+#if HAVE_HTTP2
+#include "http/h2_server.h"
+#endif
 
 typedef struct tls_host {
     char *hostname; /* NULL = default */
@@ -25,9 +28,12 @@ struct tls_ctx {
     SSL_CTX *default_ctx;
 };
 
-/* ALPN list in wire format: length-prefixed names, most preferred first.
- * "h2" is added once the HTTP/2 frontend exists. */
+/* ALPN list in wire format: length-prefixed names, most preferred first. */
+#if HAVE_HTTP2
+static const unsigned char alpn_tcp[] = "\x02h2\x08http/1.1";
+#else
 static const unsigned char alpn_tcp[] = "\x08http/1.1";
+#endif
 
 static void log_ssl_errors(const char *what)
 {
@@ -223,6 +229,13 @@ static void attach_frontend(conn_t *c)
     SSL_get0_alpn_selected(c->ssl, &proto, &plen);
     LOG_DEBUG("%s: TLS %s %s alpn=%.*s", c->peer_ip, SSL_get_version(c->ssl),
               SSL_get_cipher_name(c->ssl), (int)plen, proto ? (const char *)proto : "-");
+#if HAVE_HTTP2
+    if (plen == 2 && memcmp(proto, "h2", 2) == 0) {
+        h2_conn_attach(c);
+        return;
+    }
+#endif
+    /* "http/1.1" or no ALPN at all: HTTP/1.1 is the default. */
     h1_conn_attach(c);
 }
 

@@ -10,6 +10,8 @@
 
 #include "config/config.h"
 #include "core/buffer.h"
+#include "lb/health.h"
+#include "lb/lb.h"
 #include "net/listener.h"
 #include "net/worker.h"
 
@@ -38,6 +40,12 @@ typedef struct server {
 
     worker_t *workers;
     int nworkers;
+
+    /* One load balancing group per cfg->upstreams[i], same index. */
+    lb_group_t **groups;
+    size_t ngroups;
+    /* Active health checkers (run on worker 0's loop), one per group. */
+    health_checker_t **health;
 
     server_stats_t stats;
     uint64_t started_at; /* wall clock seconds */

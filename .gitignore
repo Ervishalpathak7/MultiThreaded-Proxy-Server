@@ -1,49 +1,30 @@
-# Ignore build files and directories
+# Build output
 /build/
-/bin/
-/obj/
-/out/
-/CMakeCache.txt
-/CMakeFiles/
-/Makefile
-/*.log
-/*.cmake
-/*.vcxproj
+/build-*/
+/cmake-build-*/
+compile_commands.json
+CMakeLists.txt.user
 
-# Ignore IDE and editor specific files
+# Generated certificates and runtime files
+/certs/
+*.pem
+*.key
+*.crt
+*.log
+*.pid
+
+# Editor / OS
 .vscode/
-/.idea/
-/*.swp
-*.suo
-*.user
-*.userosscache
-*.sln
-*.vcxproj
-*.vscode/settings.json
-
-# Ignore OS-specific files
+.idea/
+*.swp
 .DS_Store
-Thumbs.db
 
-# Ignore temporary files created by the editor
-*.tmp
-*.bak
-
-# Ignore compiled binaries and libraries
-*.exe
-*.out
+# Compiled objects
 *.o
 *.a
 *.so
 *.dylib
-*.dll
-
-# Ignore testing or debugging files
-/test-output/
+*.out
 *.gcda
 *.gcno
 *.gcov
-
-# Ignore dependency manager files (if used)
-# e.g., for CMake
-CMakeLists.txt.user

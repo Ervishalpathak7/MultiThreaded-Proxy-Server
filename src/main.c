@@ -12,6 +12,7 @@
 
 #include "config/config.h"
 #include "core/log.h"
+#include "server.h"
 
 static void usage(const char *argv0)
 {
@@ -81,8 +82,11 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    /* Server start-up is added in the next step. */
     LOG_INFO("configuration loaded from %s", config_path);
-    config_free(cfg);
-    return 0;
+    server_t *srv = server_new(cfg); /* takes ownership of cfg */
+    if (!srv)
+        return 1;
+    int rc = server_run(srv);
+    server_free(srv);
+    return rc;
 }

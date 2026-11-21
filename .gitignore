@@ -28,3 +28,6 @@ CMakeLists.txt.user
 *.gcda
 *.gcno
 *.gcov
+
+# Benchmark runs (bench/RESULTS.md and bench/charts/ hold the latest summary)
+/bench/results/

@@ -317,6 +317,20 @@ cmake --build build-debug -j
 
 Every result goes into `bench/RESULTS.md` along with the hardware and command used.
 
+### Running the benchmarks
+
+```bash
+brew install wrk nghttp2          # or: sudo apt install wrk nghttp2-client
+sudo sysctl -w kern.ipc.somaxconn=4096   # macOS; Linux: net.core.somaxconn (resets on reboot)
+./bench/run.sh                    # full suite (~7 min); --quick for a 2-minute smoke test
+```
+
+The suite covers HTTP/1.1 cache hits and misses, HTTPS, HTTP/2, HTTP/3, TLS handshakes
+per second, response sizes, a 16–4096 connection sweep and multi-core scaling. It
+writes [`bench/RESULTS.md`](./bench/RESULTS.md) (tables, charts, highlights) and keeps
+raw tool output in `bench/results/`. See [`bench/README.md`](./bench/README.md) for the
+scenarios, tuning knobs and methodology.
+
 ## 📚 Core Reading List
 
 - *Beej's Guide to Network Programming*: sockets

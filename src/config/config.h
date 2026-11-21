@@ -34,9 +34,9 @@
 
 typedef enum {
     LB_ROUND_ROBIN = 0,
-    LB_WEIGHTED, /* smooth weighted round robin */
-    LB_LEAST_CONN,
-    LB_IP_HASH, /* consistent hashing on the client address */
+    LB_WEIGHTED,      /* smooth weighted round robin */
+    LB_LEAST_CONN,   /* least connections */
+    LB_IP_HASH,     /* consistent hashing on the client address */
 } lb_strategy_t;
 
 typedef struct config_server {
@@ -116,10 +116,12 @@ config_t *config_load(const char *path, char *err, size_t errlen);
 config_t *config_parse(const char *text, char *err, size_t errlen);
 void config_free(config_t *cfg);
 
+/* Find an upstream by name; NULL if not found. */
 config_upstream_t *config_find_upstream(const config_t *cfg, const char *name);
 /* Longest-prefix match of a request path; NULL if nothing matches. */
 config_route_t *config_match_route(const config_t *cfg, const char *path, size_t len);
 
+/* Return a string representation of the load balancing strategy. */
 const char *lb_strategy_name(lb_strategy_t s);
 
 #endif /* APROXY_CONFIG_H */
